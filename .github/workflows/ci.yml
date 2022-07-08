@@ -1,0 +1,157 @@
+name: Application CI
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ] 
+env:
+  NODE_VERSION: 16.14.0
+  SPRING_OUTPUT_ANSI_ENABLED: DETECT
+  SPRING_JPA_SHOW_SQL: false
+  JHI_DISABLE_WEBPACK_LOGS: true
+
+jobs:
+
+  validation:
+    name: 'Gradle Wrapper Validation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: gradle/wrapper-validation-action@v1
+
+  snyk-test:
+    name: Run Snyk to check for vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./.github/actions/setup-dependencies
+      
+      - uses: snyk/actions/maven-3-jdk-11@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --sarif-file-output=snyk.sarif
+      - name: Upload result to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: snyk.sarif  
+
+  backend-test:   
+    name: Backend test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./.github/actions/setup-dependencies
+      - name: Run backend test
+        run: |
+          chmod +x gradlew
+          npm run ci:backend:test
+
+  sonar-scan:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./.github/actions/setup-dependencies
+        with:
+          java-version: 11
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar  
+        
+      - name: Sonar scan 
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}   
+        run: |
+          chmod +x gradlew
+          if [ ! -z "$SONAR_TOKEN" ]; then
+              ./gradlew -Pprod clean check jacocoTestReport sonarqube --no-daemon
+          else
+              echo No SONAR_TOKEN, skipping...
+          fi  
+
+  snykcontainer-scan:
+    name: Scan container image for vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 40 
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./.github/actions/setup-dependencies
+      - name: Build a container image using jib
+        run: ./gradlew bootJar -Pprod jibDockerBuild --no-daemon  # using Jib connecting to the local Docker daemon 
+      - name: Run Snyk to check the image for vulnerabilities  
+        continue-on-error: true
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: store
+          args: --severity-threshold=high  
+
+  Package-Build-Publish:
+    name: Package, build and publish container image using jib
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    needs: [validation, snyk-test, backend-test, sonar-scan, snykcontainer-scan]
+    timeout-minutes: 40 
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./.github/actions/setup-dependencies
+
+      - name: Get short SHA 
+        id: myid
+        run: echo "::set-output name=sha8::$(echo ${GITHUB_SHA} | cut -c1-8)"  
+
+      - name: Package application
+        run: npm run java:jar:prod
+        # jib is not using local docker daemon for this build
+      - name: Build and publish container image to dockerhub
+        if: github.ref == 'refs/heads/main'
+        run: |
+          DOCKER_TAG=${{ steps.myid.outputs.sha8 }}
+          ./gradlew jib -Djib.to.image="${{ secrets.DOCKER_USERNAME }}"/diss22-notification:${DOCKER_TAG} -Djib.to.auth.username="${{ secrets.DOCKER_USERNAME }}" -Djib.to.auth.password="${{ secrets.DOCKER_PASSWORD }}" -Pprod --no-daemon
+        
+        # ## in the event of a release
+        #if:(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        #run: |
+        #  GIT_TAG=:${GITHUB_REF#refs/tags/}
+        #  DOCKER_TAG=${GIT_TAG#:refs/heads/main}
+        #  ./gradlew jib -Djib.to.image="${{ secrets.DOCKER_USERNAME }}"/diss22-notification${DOCKER_TAG} -Djib.to.auth.username="${{ secrets.DOCKER_USERNAME }}" -Djib.to.auth.password="${{ secrets.DOCKER_PASSWORD }}" -Pprod --no-daemon
+
+    outputs:
+      docker-tag: ${{ steps.myid.outputs.sha8 }} 
+
+  Update:
+    name: Update manifets in the GitOps repo
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+    runs-on: ubuntu-latest
+    needs: Package-Build-Publish
+    timeout-minutes: 40
+    steps:    
+      - name: Setup Kustomize
+        uses: imranismail/setup-kustomize@v1
+      - name: Update Kubernetes resources
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }} 
+          ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }} 
+        run: |
+          DOCKER_TAG=${{ needs.Package-Build-Publish.outputs.docker-tag }}
+          TEMP_FOLDER="$(mktemp -d)" 
+          git clone -b develop "https://${{github.actor}}:${ACCESS_TOKEN}@github.com/JoseSunoj/Diss22-IaC.git" ${TEMP_FOLDER}  
+          cd ${TEMP_FOLDER}/manifests/application
+          kustomize edit set image l00162972/product=$DOCKER_USERNAME/diss22-notification:${DOCKER_TAG}
+          cat kustomization.yml
+          cd ../../
+          git config --local user.email '${{github.actor}}@users.noreply.github.com'
+          git config --local user.name '${{github.actor}}'
+          git commit -am "update product app image with new tag- $DOCKER_TAG"
+          git push -u origin develop
