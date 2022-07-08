@@ -148,10 +148,10 @@ jobs:
           TEMP_FOLDER="$(mktemp -d)" 
           git clone -b develop "https://${{github.actor}}:${ACCESS_TOKEN}@github.com/JoseSunoj/Diss22-IaC.git" ${TEMP_FOLDER}  
           cd ${TEMP_FOLDER}/manifests/application
-          kustomize edit set image l00162972/product=$DOCKER_USERNAME/diss22-notification:${DOCKER_TAG}
+          kustomize edit set image l00162972/notification=$DOCKER_USERNAME/diss22-notification:${DOCKER_TAG}
           cat kustomization.yml
           cd ../../
           git config --local user.email '${{github.actor}}@users.noreply.github.com'
           git config --local user.name '${{github.actor}}'
-          git commit -am "update product app image with new tag- $DOCKER_TAG"
+          git commit -am "update notification app image with new tag- $DOCKER_TAG"
           git push -u origin develop
