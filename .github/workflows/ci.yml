@@ -147,8 +147,8 @@ jobs:
           DOCKER_TAG=${{ needs.Package-Build-Publish.outputs.docker-tag }}
           TEMP_FOLDER="$(mktemp -d)" 
           git clone -b develop "https://${{github.actor}}:${ACCESS_TOKEN}@github.com/JoseSunoj/Diss22-IaC.git" ${TEMP_FOLDER}  
-          cd ${TEMP_FOLDER}/manifests/application
-          kustomize edit set image l00162972/notification=$DOCKER_USERNAME/diss22-notification:${DOCKER_TAG}
+          cd ${TEMP_FOLDER}/manifests/application/base/notification-k8s
+          kustomize edit set image l00162972/diss22-notification=$DOCKER_USERNAME/diss22-notification:${DOCKER_TAG}
           cat kustomization.yml
           cd ../../
           git config --local user.email '${{github.actor}}@users.noreply.github.com'
