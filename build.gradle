@@ -182,7 +182,7 @@ dependencies {
     implementation "org.apache.commons:commons-lang3"
     implementation "javax.transaction:javax.transaction-api"
     implementation "org.springframework.boot:spring-boot-loader-tools"
-    implementation "org.springframework.boot:spring-boot-starter-mail"
+    implementation "org.springframework.boot:spring-boot-starter-mail:2.7.1"
     implementation "org.springframework.boot:spring-boot-starter-logging"
     implementation "org.springframework.boot:spring-boot-starter-actuator"
     implementation "org.springframework.boot:spring-boot-starter-data-mongodb"
