@@ -36,7 +36,7 @@ jobs:
           snyk auth ${{secrets.SNYK_TOKEN}}
       - name: Snyk test
         continue-on-error: true
-        run: snyk test --all-projects --severity-threshold=critical --json > snyk.json
+        run: snyk test --all-projects --fail-fast && echo $? --json > snyk.json
         
       - name: Snyk monitor
         continue-on-error: true
