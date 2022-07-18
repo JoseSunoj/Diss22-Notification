@@ -4,6 +4,8 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main ] 
+permissions:
+  contents: read    
 env:
   NODE_VERSION: 16.14.0
   SPRING_OUTPUT_ANSI_ENABLED: DETECT
@@ -17,23 +19,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: gradle/wrapper-validation-action@v1
+      - uses: gradle/wrapper-validation-action@859c33240bd026ce8d5f711f5adcc65c2f8eafc1
 
   snyk-test:
     name: Run Snyk to check for vulnerabilities
+    permissions:
+      contents: read 
+      security-events: write
     runs-on: ubuntu-latest
     timeout-minutes: 40
     
     steps:
       - uses: actions/checkout@v3
       - uses: ./.github/actions/setup-dependencies
-      
-      - uses: snyk/actions/maven-3-jdk-11@master
+      - name: Install Snyk CLI
+        run: |
+          npm install snyk -g
+          snyk auth ${{secrets.SNYK_TOKEN}}
+      - name: Snyk test
         continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk test --all-projects --severity-threshold=critical --json > snyk.json
+        
+      - name: Snyk monitor
+        continue-on-error: true
+        run: snyk monitor --all-projects --severity-threshold=critical --json > snyk.json
+         
+      - uses: garethr/snyk-to-sarif@ae8e0fc00597b6befd95a03df5729990da1d7a33
+      - uses: actions/upload-artifact@v2
         with:
-          args: --sarif-file-output=snyk.sarif
+          name: SARIF
+          path: snyk.sarif      
       - name: Upload result to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v2
         with:
@@ -53,6 +68,8 @@ jobs:
 
   sonar-scan:
     name: SonarCloud Scan
+    permissions:
+      contents: read 
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -81,6 +98,8 @@ jobs:
 
   snykcontainer-scan:
     name: Scan container image for vulnerabilities
+    permissions:
+      contents: read 
     runs-on: ubuntu-latest
     timeout-minutes: 40 
     steps:
@@ -90,11 +109,11 @@ jobs:
         run: ./gradlew bootJar -Pprod jibDockerBuild --no-daemon  # using Jib connecting to the local Docker daemon 
       - name: Run Snyk to check the image for vulnerabilities  
         continue-on-error: true
-        uses: snyk/actions/docker@master
+        uses: snyk/actions/docker@14818c4695ecc4045f33c9cee9e795a788711ca4
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          image: store
+          image: notification
           args: --severity-threshold=high  
 
   Package-Build-Publish:
@@ -115,18 +134,12 @@ jobs:
         run: npm run java:jar:prod
         # jib is not using local docker daemon for this build
       - name: Build and publish container image to dockerhub
-        if: github.ref == 'refs/heads/main'
+        env:
+          DOCKER_TAG: ${{ steps.myid.outputs.sha8 }}
+          #  GIT_TAG: ${GITHUB_REF#refs/tags/}
+          #  DOCKER_TAG: ${GIT_TAG#:refs/heads/main}
         run: |
-          DOCKER_TAG=${{ steps.myid.outputs.sha8 }}
           ./gradlew jib -Djib.to.image="${{ secrets.DOCKER_USERNAME }}"/diss22-notification:${DOCKER_TAG} -Djib.to.auth.username="${{ secrets.DOCKER_USERNAME }}" -Djib.to.auth.password="${{ secrets.DOCKER_PASSWORD }}" -Pprod --no-daemon
-        
-        # ## in the event of a release
-        #if:(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
-        #run: |
-        #  GIT_TAG=:${GITHUB_REF#refs/tags/}
-        #  DOCKER_TAG=${GIT_TAG#:refs/heads/main}
-        #  ./gradlew jib -Djib.to.image="${{ secrets.DOCKER_USERNAME }}"/diss22-notification${DOCKER_TAG} -Djib.to.auth.username="${{ secrets.DOCKER_USERNAME }}" -Djib.to.auth.password="${{ secrets.DOCKER_PASSWORD }}" -Pprod --no-daemon
-
     outputs:
       docker-tag: ${{ steps.myid.outputs.sha8 }} 
 
@@ -138,13 +151,13 @@ jobs:
     timeout-minutes: 40
     steps:    
       - name: Setup Kustomize
-        uses: imranismail/setup-kustomize@v1
+        uses: imranismail/setup-kustomize@8fa954828ed3cfa7a487a2ba9f7104899bb48b2f
       - name: Update Kubernetes resources
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }} 
           ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }} 
+          DOCKER_TAG: ${{ needs.Package-Build-Publish.outputs.docker-tag }}
         run: |
-          DOCKER_TAG=${{ needs.Package-Build-Publish.outputs.docker-tag }}
           TEMP_FOLDER="$(mktemp -d)" 
           git clone -b develop "https://${{github.actor}}:${ACCESS_TOKEN}@github.com/JoseSunoj/Diss22-IaC.git" ${TEMP_FOLDER}  
           cd ${TEMP_FOLDER}/manifests/application/base/notification-k8s
