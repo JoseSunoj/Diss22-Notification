@@ -4,6 +4,8 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main ] 
+permissions:
+  contents: read    
 env:
   NODE_VERSION: 16.14.0
   SPRING_OUTPUT_ANSI_ENABLED: DETECT
@@ -17,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: gradle/wrapper-validation-action@v1
+      - uses: gradle/wrapper-validation-action@859c33240bd026ce8d5f711f5adcc65c2f8eafc1
 
   snyk-test:
     name: Run Snyk to check for vulnerabilities
@@ -132,18 +134,12 @@ jobs:
         run: npm run java:jar:prod
         # jib is not using local docker daemon for this build
       - name: Build and publish container image to dockerhub
-        if: github.ref == 'refs/heads/main'
+        env:
+          DOCKER_TAG: ${{ steps.myid.outputs.sha8 }}
+          #  GIT_TAG: ${GITHUB_REF#refs/tags/}
+          #  DOCKER_TAG: ${GIT_TAG#:refs/heads/main}
         run: |
-          DOCKER_TAG=${{ steps.myid.outputs.sha8 }}
           ./gradlew jib -Djib.to.image="${{ secrets.DOCKER_USERNAME }}"/diss22-notification:${DOCKER_TAG} -Djib.to.auth.username="${{ secrets.DOCKER_USERNAME }}" -Djib.to.auth.password="${{ secrets.DOCKER_PASSWORD }}" -Pprod --no-daemon
-        
-        # ## in the event of a release
-        #if:(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
-        #run: |
-        #  GIT_TAG=:${GITHUB_REF#refs/tags/}
-        #  DOCKER_TAG=${GIT_TAG#:refs/heads/main}
-        #  ./gradlew jib -Djib.to.image="${{ secrets.DOCKER_USERNAME }}"/diss22-notification${DOCKER_TAG} -Djib.to.auth.username="${{ secrets.DOCKER_USERNAME }}" -Djib.to.auth.password="${{ secrets.DOCKER_PASSWORD }}" -Pprod --no-daemon
-
     outputs:
       docker-tag: ${{ steps.myid.outputs.sha8 }} 
 
@@ -160,8 +156,8 @@ jobs:
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }} 
           ACCESS_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }} 
+          DOCKER_TAG: ${{ needs.Package-Build-Publish.outputs.docker-tag }}
         run: |
-          DOCKER_TAG=${{ needs.Package-Build-Publish.outputs.docker-tag }}
           TEMP_FOLDER="$(mktemp -d)" 
           git clone -b develop "https://${{github.actor}}:${ACCESS_TOKEN}@github.com/JoseSunoj/Diss22-IaC.git" ${TEMP_FOLDER}  
           cd ${TEMP_FOLDER}/manifests/application
